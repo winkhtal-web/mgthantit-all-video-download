@@ -2,6 +2,7 @@ import os
 import sys
 import asyncio
 import logging
+import threading
 import yt_dlp
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,9 +11,11 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import uvicorn
 
+# Setup Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# မိမိ Bot Token ကို ဤနေရာတွင် သေချာစွာ ထည့်သွင်းပါ
 BOT_TOKEN = "8927253241:AAFaQO_zQQU5XeXNGHeA8acoX2LEkhp3haI"
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -31,12 +34,14 @@ app.add_middleware(
 # ----------------- WEB API ENDPOINTS -----------------
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
-    with open("index.html", "r", encoding="utf-8") as f:
-        return f.read()
+    if os.path.exists("index.html"):
+        with open("index.html", "r", encoding="utf-8") as f:
+            return f.read()
+    return "<h1>MGTHANTIT Downloader Server is Running!</h1>"
 
 @app.get("/api/download")
 async def web_download_api(url: str, quality: str, background_tasks: BackgroundTasks):
-    logger.info(f"Web Request - URL: {url}, Quality: {quality}")
+    logger.info(f"Web Request -> URL: {url}, Quality: {quality}")
     
     ydl_opts = {
         'outtmpl': f'{DOWNLOAD_DIR}/web_%(id)s.%(ext)s',
@@ -75,7 +80,7 @@ async def web_download_api(url: str, quality: str, background_tasks: BackgroundT
         background_tasks.add_task(remove_file, filepath)
         return FileResponse(filepath, media_type='application/octet-stream', filename=os.path.basename(filepath))
     except Exception as e:
-        logger.error(f"Download Error: {str(e)}")
+        logger.error(f"Web Download Error: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
 # ----------------- TELEGRAM BOT LOGIC -----------------
@@ -87,8 +92,13 @@ def get_main_reply_keyboard():
     )
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    if user_id in context.user_data: context.user_data[user_id].clear()
+    
     await update.message.reply_text(
-        "🚀 **MGTHANTIT Premium Downloader Bot**\n\nစာရိုက်ဘေးက ခလုတ်များကိုသုံးနိုင်သလို၊ လင့်ခ်ကို တိုက်ရိုက်လည်း ပို့နိုင်ပါတယ်ဗျာ။ 👇",
+        "🚀 **MGTHANTIT Premium Downloader Bot မှ ကြိုဆိုပါတယ်!**\n\n"
+        "စာရိုက်ဘေးက Menu ခလုတ်များကို သုံးနိုင်သလို၊ ဒေါင်းလုဒ်ဆွဲလိုသော လင့်ခ်ကိုလည်း တိုက်ရိုက် ပို့ပေးနိုင်ပါတယ်ဗျာ။ 👇\n\n"
+        "👨‍💻 *Admin: By MGTHANT*",
         reply_markup=get_main_reply_keyboard()
     )
 
@@ -105,7 +115,10 @@ async def handle_bot_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
             [InlineKeyboardButton("💎 4K Ultra HD", callback_data="yt_4k"), InlineKeyboardButton("✨ 1080p Full HD", callback_data="yt_1080p")],
             [InlineKeyboardButton("📁 720p HD", callback_data="yt_720p"), InlineKeyboardButton("📁 360p Low", callback_data="yt_360p")]
         ]
-        await update.message.reply_text("✅ လင့်ခ်ရပါပြီ၊ Quality ရွေးချယ်ပေးပါရန်။ 👇", reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.message.reply_text(
+            "✅ **လင့်ခ်လက်ခံရရှိပါပြီ!**\n\nဒေါင်းလုဒ်ဆွဲလိုသည့် Quality ကို ရွေးချယ်ပေးပါရန်။ 👇", 
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
 async def bot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -113,7 +126,7 @@ async def bot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     
     if user_id not in context.user_data or 'link' not in context.user_data[user_id]:
-        await query.edit_message_text("❌ သက်တမ်းကုန်ဆုံးသွားပါပြီ။")
+        await query.edit_message_text("❌ သက်တမ်းကုန်ဆုံးသွားပါပြီ။ လင့်ခ်ပြန်ပို့ပေးပါ။")
         return
         
     url = context.user_data[user_id]['link']
@@ -137,8 +150,10 @@ async def bot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         info = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(ydl_opts).extract_info(url, download=True))
         filename = yt_dlp.YoutubeDL(ydl_opts).prepare_filename(info)
         
-        if data == "yt_mp3" and not os.path.exists(filename): filename = os.path.splitext(filename)[0] + ".m4a"
-        elif not os.path.exists(filename): filename = os.path.splitext(filename)[0] + ".mp4"
+        if data == "yt_mp3" and not os.path.exists(filename): 
+            filename = os.path.splitext(filename)[0] + ".m4a"
+        elif not os.path.exists(filename): 
+            filename = os.path.splitext(filename)[0] + ".mp4"
             
         with open(filename, 'rb') as f:
             if data == "yt_mp3":
@@ -149,21 +164,24 @@ async def bot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.delete()
         if os.path.exists(filename): os.remove(filename)
     except Exception as e:
-        await context.bot.send_message(chat_id=query.message.chat_id, text=f"❌ Error: {str(e)}")
+        logger.error(f"Bot Error: {str(e)}")
+        await context.bot.send_message(chat_id=query.message.chat_id, text=f"❌ ဒေါင်းလုဒ်ဆွဲ၍ မရနိုင်ပါ။")
 
-async def run_bot():
+# Bot ကို သီးသန့် Thread ဖြင့် အားအပြည့် မောင်းနှင်ခြင်း
+def start_bot_thread():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     bot_app = Application.builder().token(BOT_TOKEN).build()
     bot_app.add_handler(CommandHandler("start", start_command))
     bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_bot_message))
     bot_app.add_handler(CallbackQueryHandler(bot_callback))
     
-    await bot_app.initialize()
-    await bot_app.start()
-    await bot_app.updater.start_polling()
+    logger.info("Telegram Bot is starting up on dedicated thread...")
+    bot_app.run_polling(close_loop=False)
 
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(run_bot())
-
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # FastAPI တက်လာတာနဲ့ Bot ကို Thread ခွဲပြီး နောက်ကွယ်မှာ အလုပ်လုပ်စေခြင်း
+    t = threading.Thread(target=start_bot_thread, daemon=True)
+    t.start()
